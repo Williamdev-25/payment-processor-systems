@@ -344,14 +344,23 @@ jobs:
         run: |
           RUNNER_CIDR="${{ steps.runner_ip.outputs.ip }}/32"
           ADMIN_CIDR="${{ secrets.TF_VAR_ADMIN_CIDR }}"
-          aws eks update-cluster-config \
+          CURRENT=$(aws eks describe-cluster \
             --name ${{ env.EKS_CLUSTER_NAME }} \
             --region ${{ env.AWS_REGION }} \
-            --resources-vpc-config "publicAccessCidrs=$ADMIN_CIDR,$RUNNER_CIDR" \
-            2>&1 || echo "Cluster may not exist yet -- skipping whitelist (first apply)"
-          aws eks wait cluster-active \
-            --name ${{ env.EKS_CLUSTER_NAME }} \
-            --region ${{ env.AWS_REGION }} || true
+            --query 'cluster.resourcesVpcConfig.publicAccessCidrs' \
+            --output text 2>/dev/null || echo "")
+          if echo "$CURRENT" | grep -q "$RUNNER_CIDR"; then
+            echo "Runner IP already whitelisted -- skipping update."
+          else
+            aws eks update-cluster-config \
+              --name ${{ env.EKS_CLUSTER_NAME }} \
+              --region ${{ env.AWS_REGION }} \
+              --resources-vpc-config "publicAccessCidrs=$ADMIN_CIDR,$RUNNER_CIDR" \
+              2>&1 || echo "Cluster may not exist yet -- skipping whitelist (first apply)"
+            aws eks wait cluster-active \
+              --name ${{ env.EKS_CLUSTER_NAME }} \
+              --region ${{ env.AWS_REGION }} || true
+          fi
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
