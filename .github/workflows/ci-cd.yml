@@ -1,0 +1,404 @@
+name: Fintech SRE Platform CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'k8s/**'
+      - 'automation/**'
+      - 'terraform/**'
+      - 'environments/**'
+      - 'monitoring/**'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.15.8"
+  TF_WORKING_DIR: environments/dev
+  EKS_CLUSTER_NAME: dev-eks
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+
+jobs:
+  # ===========================================================================
+  # Infra: format, validate, lint, plan
+  # ===========================================================================
+  terraform-plan:
+    runs-on: ubuntu-latest
+    name: 'Terraform Plan'
+    outputs:
+      plan_content: ${{ steps.format_plan.outputs.plan_result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive -diff
+        continue-on-error: true
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate -no-color
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: Run TFLint
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: tflint --recursive --format compact
+        continue-on-error: true
+
+      - name: Get GitHub Actions runner IP
+        id: runner_ip
+        run: echo "ip=$(curl -s https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -no-color -out=tfplan \
+            -var="grafana_admin_password=${{ secrets.TF_VAR_GRAFANA_ADMIN_PASSWORD }}" \
+            -var="slack_webhook_url=${{ secrets.TF_VAR_SLACK_WEBHOOK_URL }}" \
+            -var="admin_cidr=${{ secrets.TF_VAR_ADMIN_CIDR }}" \
+            -var="ci_runner_cidr=${{ steps.runner_ip.outputs.ip }}/32" \
+            2>&1 | tee plan_output.txt
+
+      - name: Format plan output
+        id: format_plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          PLAN=$(cat plan_output.txt | head -c 50000)
+          echo "plan_result<<EOF" >> $GITHUB_OUTPUT
+          echo "$PLAN" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync(`${process.env.TF_WORKING_DIR}/plan_output.txt`, 'utf8');
+            if (plan.length > 60000) plan = plan.slice(-60000);
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### Terraform Plan\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`,
+            });
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 5
+
+  # ===========================================================================
+  # Infra security scanning
+  # ===========================================================================
+  security-scan:
+    runs-on: ubuntu-latest
+    name: 'Security Scanning'
+    needs: terraform-plan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: true
+          output_format: cli,sarif
+          output_file_path: console,checkov-results.sarif
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+      - name: Run Trivy IaC scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 -- pinned SHA, see project notes on why
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-config-results.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy config SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config-results.sarif
+          category: trivy-config
+
+  # ===========================================================================
+  # App: test, lint manifests
+  # ===========================================================================
+  test-app:
+    runs-on: ubuntu-latest
+    name: 'Test txn-gateway'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: app/txn-gateway
+        run: pip install -r requirements.txt
+
+      - name: Smoke-test endpoints
+        working-directory: app/txn-gateway
+        run: |
+          python -c "
+          from app import app
+          c = app.test_client()
+          assert c.post('/transactions').status_code in (200, 500)
+          assert c.get('/healthz').status_code == 200
+          assert c.get('/readyz').status_code == 200
+          assert c.get('/metrics').status_code == 200
+          assert c.post('/admin/break').status_code == 200
+          assert c.get('/healthz').status_code == 500
+          assert c.post('/admin/fix').status_code == 200
+          print('All smoke tests passed.')
+          "
+
+      - name: Validate Kubernetes manifests
+        run: |
+          pip install pyyaml
+          python -c "
+          import yaml, glob
+          for f in glob.glob('k8s/*.yaml') + glob.glob('monitoring/alerts/*.yaml'):
+              with open(f) as fh: list(yaml.safe_load_all(fh))
+              print(f, 'OK')
+          "
+
+      - name: Validate remediation script
+        run: python -m py_compile automation/remediate.py
+
+  # ===========================================================================
+  # Container image scanning
+  # ===========================================================================
+  security-scan-images:
+    runs-on: ubuntu-latest
+    name: 'Image Vulnerability Scan'
+    needs: test-app
+    strategy:
+      matrix:
+        component: [txn-gateway, remediation-bot]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          if [ "${{ matrix.component }}" = "txn-gateway" ]; then
+            docker build -t ${{ matrix.component }}:scan app/txn-gateway
+          else
+            docker build -t ${{ matrix.component }}:scan automation
+          fi
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ matrix.component }}:scan
+          format: sarif
+          output: trivy-image-${{ matrix.component }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-${{ matrix.component }}.sarif
+          category: trivy-image-${{ matrix.component }}
+
+  # ===========================================================================
+  # Manual approval gate before touching real infrastructure
+  # ===========================================================================
+  manual-approval:
+    runs-on: ubuntu-latest
+    name: 'Manual Approval'
+    needs: [terraform-plan, security-scan, test-app, security-scan-images]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      issues: write
+    steps:
+      - name: Await manual approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ vars.APPROVERS }}
+          minimum-approvals: 1
+          issue-title: "Deploy fintech-sre-platform infrastructure + app"
+          issue-body: |
+            Please review and approve or deny.
+
+            ## Terraform Plan
+            <details><summary>Show plan</summary>
+
+            ${{ needs.terraform-plan.outputs.plan_content }}
+
+            </details>
+
+            **To approve:** comment `approved`
+            **To deny:** comment `denied`
+
+  # ===========================================================================
+  # Apply infrastructure
+  # ===========================================================================
+  deploy-infra:
+    runs-on: ubuntu-latest
+    name: 'Apply Infrastructure'
+    needs: manual-approval
+    outputs:
+      image_tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: Get GitHub Actions runner IP
+        id: runner_ip
+        run: echo "ip=$(curl -s https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform apply -auto-approve \
+            -var="grafana_admin_password=${{ secrets.TF_VAR_GRAFANA_ADMIN_PASSWORD }}" \
+            -var="slack_webhook_url=${{ secrets.TF_VAR_SLACK_WEBHOOK_URL }}" \
+            -var="admin_cidr=${{ secrets.TF_VAR_ADMIN_CIDR }}" \
+            -var="ci_runner_cidr=${{ steps.runner_ip.outputs.ip }}/32"
+        # Fresh apply against current state, not a stale saved plan file --
+        # see project notes on why reusing a pre-computed plan across
+        # multiple applies in the same job caused a real "stale plan" error.
+
+  # ===========================================================================
+  # Build & push app + bot images
+  # ===========================================================================
+  build-and-push:
+    runs-on: ubuntu-latest
+    name: 'Build & Push Images'
+    needs: deploy-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            docker login --username AWS --password-stdin \
+            $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build & push txn-gateway and remediation-bot
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          TAG="${{ needs.deploy-infra.outputs.image_tag }}"
+
+          docker build -t "$REGISTRY/dev-txn-gateway:$TAG" app/txn-gateway
+          docker push "$REGISTRY/dev-txn-gateway:$TAG"
+
+          docker build -t "$REGISTRY/dev-remediation-bot:$TAG" automation
+          docker push "$REGISTRY/dev-remediation-bot:$TAG"
+        # Immutable, commit-SHA image tags -- never :latest -- so a rollback
+        # (kubectl rollout undo) always has a real, specific prior image to
+        # fall back to.
+
+  # ===========================================================================
+  # Deploy to EKS
+  # ===========================================================================
+  deploy-app:
+    runs-on: ubuntu-latest
+    name: 'Deploy to EKS'
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Set image and apply manifests
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          TAG="${{ needs.build-and-push.outputs.image_tag || github.sha }}"
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f monitoring/alerts/prometheusrule.yaml
+          kubectl apply -f monitoring/alerts/recording-rules.yaml
+          kubectl apply -f monitoring/alerts/infra-alerts.yaml
+          kubectl apply -f k8s/remediation-cronjob.yaml
+          kubectl set image deployment/txn-gateway \
+            txn-gateway="$ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/dev-txn-gateway:${{ github.sha }}"
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/txn-gateway --timeout=180s
+
+      - name: Automatic rollback on failed rollout
+        if: failure()
+        run: |
+          echo "Rollout failed or timed out -- rolling back automatically."
+          kubectl rollout undo deployment/txn-gateway
+          kubectl rollout status deployment/txn-gateway --timeout=120s

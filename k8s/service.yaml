@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: txn-gateway
+  labels:
+    app: txn-gateway
+spec:
+  selector:
+    app: txn-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: txn-gateway
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: txn-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

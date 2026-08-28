@@ -1,0 +1,94 @@
+# Infrastructure-level alerts -- these are NOT about txn-gateway
+# specifically. They cover the cluster/node layer underneath every
+# workload, which the SLO-derived application alerts in prometheusrule.yaml
+# deliberately don't touch. Both layers are needed: an application can
+# look "fine" on its own SLOs right up until the node underneath it runs
+# out of disk and takes the whole pod down with it.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: infra-alerts
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: node.alerts
+      rules:
+        - alert: NodeDown
+          expr: up{job="node-exporter"} == 0
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            summary: "Node {{ $labels.instance }} is down"
+            description: "Node {{ $labels.instance }} has been unreachable for more than 2 minutes."
+            runbook: "docs/runbook.md#node-down"
+
+        - alert: NodeMemoryHighUsage
+          expr: |
+            (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+          for: 5m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "High memory usage on {{ $labels.instance }}"
+            description: "Memory usage is {{ $value | printf \"%.1f\" }}% on {{ $labels.instance }}."
+            runbook: "docs/runbook.md#node-memory-high"
+
+        - alert: NodeDiskSpaceWarning
+          expr: |
+            (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 80
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "Disk space warning on {{ $labels.instance }}"
+            description: "Disk usage on {{ $labels.instance }} ({{ $labels.mountpoint }}) is above 80%."
+            runbook: "docs/runbook.md#node-disk-space"
+
+        - alert: NodeDiskSpaceCritical
+          expr: |
+            (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 95
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "Disk space critical on {{ $labels.instance }}"
+            description: "Disk usage on {{ $labels.instance }} ({{ $labels.mountpoint }}) is above 95% -- imminent risk of pod evictions or write failures."
+            runbook: "docs/runbook.md#node-disk-space"
+
+    - name: persistentvolume.alerts
+      rules:
+        - alert: PersistentVolumeUsageWarning
+          expr: |
+            (1 - (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes)) * 100 > 80
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "PersistentVolume {{ $labels.persistentvolumeclaim }} usage above 80%"
+            description: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is above 80% capacity -- this includes the Prometheus and Loki volumes themselves, not just application data."
+            runbook: "docs/runbook.md#pv-usage"
+
+        - alert: PersistentVolumeUsageCritical
+          expr: |
+            (1 - (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes)) * 100 > 95
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "PersistentVolume {{ $labels.persistentvolumeclaim }} usage above 95%"
+            description: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is nearly full."
+            runbook: "docs/runbook.md#pv-usage"
+
+    - name: deployment.alerts
+      rules:
+        - alert: DeploymentNotAvailable
+          expr: kube_deployment_status_replicas_available{deployment="txn-gateway"} == 0
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no ready replicas"
+            description: "txn-gateway has zero available replicas -- the service is fully down, not degraded."
+            runbook: "docs/runbook.md#deployment-not-available"

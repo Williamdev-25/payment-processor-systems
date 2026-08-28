@@ -1,0 +1,110 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch: {}
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.15.8"
+  TF_WORKING_DIR: environments/dev
+  EKS_CLUSTER_NAME: dev-eks
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+jobs:
+  manual-approval:
+    runs-on: ubuntu-latest
+    name: 'Manual Approval'
+    permissions:
+      issues: write
+    steps:
+      - name: Await manual approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ vars.APPROVERS }}
+          minimum-approvals: 1
+          issue-title: "DESTROY fintech-sre-platform dev environment"
+          issue-body: |
+            You triggered a full infrastructure destroy of the **dev** environment.
+
+            This will delete:
+            - All Kubernetes workloads (txn-gateway, remediation cronjob, alert rules)
+            - The monitoring stack (Prometheus, Grafana, Alertmanager, Loki, Promtail)
+            - The EKS cluster and all node groups
+            - The VPC, subnets, and all networking
+            - Both ECR repositories and their images
+
+            **This cannot be undone.**
+
+            To confirm: comment `approved`
+            To cancel: comment `denied`
+
+  destroy:
+    runs-on: ubuntu-latest
+    name: 'Destroy Infrastructure'
+    needs: manual-approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get GitHub Actions runner IP
+        id: runner_ip
+        run: echo "ip=$(curl -s https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      # Temporarily allow this CI run's IP to reach the EKS API, so the
+      # kubectl deletes below (esp. the Grafana LoadBalancer Service) can
+      # actually run before the cluster/VPC get torn down -- otherwise the
+      # underlying ELB is orphaned in AWS, untracked by both kubectl and
+      # Terraform.
+      - name: Allow CI runner to reach EKS API
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform apply -auto-approve \
+            -var="grafana_admin_password=${{ secrets.TF_VAR_GRAFANA_ADMIN_PASSWORD }}" \
+            -var="slack_webhook_url=${{ secrets.TF_VAR_SLACK_WEBHOOK_URL }}" \
+            -var="admin_cidr=${{ secrets.TF_VAR_ADMIN_CIDR }}" \
+            -var="ci_runner_cidr=${{ steps.runner_ip.outputs.ip }}/32" \
+            -target=module.eks.aws_eks_cluster.this
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Delete Kubernetes manifests
+        run: |
+          kubectl delete -f k8s/remediation-cronjob.yaml --ignore-not-found
+          kubectl delete -f monitoring/alerts/infra-alerts.yaml --ignore-not-found
+          kubectl delete -f monitoring/alerts/recording-rules.yaml --ignore-not-found
+          kubectl delete -f monitoring/alerts/prometheusrule.yaml --ignore-not-found
+          kubectl delete -f k8s/service.yaml --ignore-not-found
+          kubectl delete -f k8s/deployment.yaml --ignore-not-found
+          # Explicitly wait for the Grafana LoadBalancer Service's ELB to be
+          # released before tearing down the VPC it lives in.
+          kubectl delete svc kube-prometheus-stack-grafana -n monitoring --ignore-not-found --wait=true --timeout=180s
+
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform destroy -auto-approve \
+            -var="grafana_admin_password=${{ secrets.TF_VAR_GRAFANA_ADMIN_PASSWORD }}" \
+            -var="slack_webhook_url=${{ secrets.TF_VAR_SLACK_WEBHOOK_URL }}" \
+            -var="admin_cidr=${{ secrets.TF_VAR_ADMIN_CIDR }}" \
+            -var="ci_runner_cidr=${{ steps.runner_ip.outputs.ip }}/32"

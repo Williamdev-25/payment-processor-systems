@@ -1,0 +1,153 @@
+{
+  "title": "txn-gateway — Golden Signals",
+  "uid": "txn-gateway-golden-signals",
+  "tags": ["txn-gateway", "sre", "golden-signals"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Traffic — Requests/sec",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(txn_requests_total[5m]))",
+          "legendFormat": "req/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Errors — Failure Rate (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(txn_requests_total{status=\"failed\"}[5m])) / sum(rate(txn_requests_total[5m]))",
+          "legendFormat": "error %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1.5 },
+              { "color": "red", "value": 14 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Thresholds match the slow-burn (1.5%) and fast-burn (14%) alert levels in monitoring/alerts/prometheusrule.yaml -- this panel should visually agree with why an alert did or didn't fire."
+    },
+    {
+      "id": 3,
+      "title": "Latency — p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(txn_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(txn_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(txn_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Red line at 300ms = the latency SLO target from docs/SLO.md. p95 crossing it for 5+ minutes is what TxnGatewayHighLatency alerts on."
+    },
+    {
+      "id": 4,
+      "title": "Saturation — CPU Usage vs Limit",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"txn-gateway.*\"}[5m])) by (pod)",
+          "legendFormat": "{{pod}} CPU"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Compare against the 200m CPU limit set in k8s/deployment.yaml -- pods consistently near the limit explains latency spikes before error rate rises."
+    },
+    {
+      "id": 5,
+      "title": "Saturation — Memory Usage vs Limit",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{pod=~\"txn-gateway.*\"}) by (pod)",
+          "legendFormat": "{{pod}} memory"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "Pod Restarts (last 15m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "increase(kube_pod_container_status_restarts_total{pod=~\"txn-gateway.*\"}[15m])",
+          "legendFormat": "{{pod}} restarts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Threshold of 3 matches TxnGatewayPodCrashLooping and what automation/remediate.py watches for -- if this spikes, check remediation-bot's logs next."
+    },
+    {
+      "id": 7,
+      "title": "Recent Error Logs (txn-gateway)",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"txn-gateway\"} |= \"error\"",
+          "refId": "A"
+        }
+      ],
+      "description": "The metric panels above tell you WHAT is wrong (error rate spiked); this panel, backed by Loki, tells you WHY -- the actual log lines behind that spike, without needing to kubectl logs into a pod mid-incident."
+    }
+  ]
+}

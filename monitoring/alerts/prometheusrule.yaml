@@ -1,0 +1,66 @@
+# Alerting rules derived directly from docs/SLO.md. Multi-window burn-rate
+# pattern: a fast, severe burn pages immediately; a slow, sustained burn
+# tickets instead, since it doesn't need a human awake for it right now.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: txn-gateway-slo-alerts
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: txn-gateway.availability
+      rules:
+        - alert: TxnGatewayFastBurnErrorRate
+          expr: job:txn_error_rate:ratio5m > 0.14
+          for: 2m
+          labels:
+            severity: page
+            slo: availability
+          annotations:
+            summary: "txn-gateway is burning its error budget fast"
+            description: >
+              Transaction failure rate over the last 5m exceeds 14% -- at
+              this rate the entire 30-day error budget would be exhausted
+              in under a day (~14.4x burn rate against the 99.5% SLO).
+            runbook: "docs/runbook.md#fast-burn-error-rate"
+
+        - alert: TxnGatewaySlowBurnErrorRate
+          expr: job:txn_error_rate:ratio1h > 0.015
+          for: 30m
+          labels:
+            severity: ticket
+            slo: availability
+          annotations:
+            summary: "txn-gateway error rate trending above SLO over 1h"
+            description: >
+              Failure rate sustained above 1.5% for 30+ minutes -- not
+              severe enough to page, but will exhaust the monthly error
+              budget well before the 30-day window resets if left alone.
+            runbook: "docs/runbook.md#slow-burn-error-rate"
+
+    - name: txn-gateway.latency
+      rules:
+        - alert: TxnGatewayHighLatency
+          expr: job:txn_request_latency:p95_5m > 0.3
+          for: 5m
+          labels:
+            severity: ticket
+            slo: latency
+          annotations:
+            summary: "p95 transaction latency above the 300ms SLO target"
+            description: "95th percentile transaction latency has exceeded 300ms for 5+ minutes."
+            runbook: "docs/runbook.md#high-latency"
+
+    - name: txn-gateway.health
+      rules:
+        - alert: TxnGatewayPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{pod=~"txn-gateway.*"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "txn-gateway pod is crash-looping"
+            description: "A txn-gateway pod has restarted more than 3 times in 15 minutes."
+            runbook: "docs/runbook.md#crash-looping-pod"

@@ -1,0 +1,49 @@
+# Recording rules -- pre-compute PromQL expressions that are either
+# expensive or used repeatedly (across dashboards AND alerts), and save
+# the result as a new, cheap-to-query metric. Two real benefits:
+#   1. Dashboards load faster (querying a pre-computed number instead of
+#      re-running a rate()/histogram_quantile() over raw data every time
+#      someone opens a panel).
+#   2. The SAME computed value backs both a dashboard panel and an alert
+#      rule, so they can never quietly drift out of sync with each other
+#      the way two independently-written queries eventually can.
+#
+# Naming convention follows the standard Prometheus recording-rule
+# pattern: level:metric:operations (e.g. "job:txn_error_rate:ratio5m").
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: txn-gateway-recording-rules
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: txn-gateway.recording-rules
+      interval: 30s
+      rules:
+        - record: job:txn_error_rate:ratio5m
+          expr: |
+            sum(rate(txn_requests_total{status="failed"}[5m]))
+            /
+            sum(rate(txn_requests_total[5m]))
+
+        - record: job:txn_error_rate:ratio1h
+          expr: |
+            sum(rate(txn_requests_total{status="failed"}[1h]))
+            /
+            sum(rate(txn_requests_total[1h]))
+
+        - record: job:txn_request_latency:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(txn_request_duration_seconds_bucket[5m])) by (le)
+            )
+
+        - record: job:txn_request_latency:p99_5m
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(txn_request_duration_seconds_bucket[5m])) by (le)
+            )
+
+        - record: job:txn_requests:rate5m
+          expr: sum(rate(txn_requests_total[5m]))

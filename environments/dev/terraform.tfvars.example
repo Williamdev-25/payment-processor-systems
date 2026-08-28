@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars for local use. Never commit the real file --
+# it's gitignored. In CI, these are passed as -var flags from GitHub
+# Actions secrets instead (see .github/workflows/ci-cd.yml).
+
+region                  = "us-east-1"
+env_name                = "dev"
+admin_cidr              = "203.0.113.4/32"  # your own IP -- never 0.0.0.0/0
+grafana_admin_password  = "changeme"         # overridden by TF_VAR_GRAFANA_ADMIN_PASSWORD in CI
+enable_logging          = true
+slack_webhook_url       = "changeme"  # overridden by TF_VAR_SLACK_WEBHOOK_URL in CI

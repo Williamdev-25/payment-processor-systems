@@ -1,0 +1,120 @@
+{
+  "title": "txn-gateway — Business & Settlement Metrics",
+  "uid": "txn-gateway-business-metrics",
+  "tags": ["txn-gateway", "business", "settlement"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Settled Transactions / min",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(txn_requests_total{status=\"settled\"}[5m])) * 60"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Core throughput indicator -- the closest proxy this demo has to 'revenue-generating activity per minute'."
+    },
+    {
+      "id": 2,
+      "title": "Failed Transactions / min",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(txn_requests_total{status=\"failed\"}[5m])) * 60"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Every failed transaction here is a candidate for real financial or reputational cost in a live trading platform -- retried settlement, counterparty friction, or a missed execution window."
+    },
+    {
+      "id": 3,
+      "title": "30-Day Error Budget Remaining",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "100 * (1 - (1 - (sum(increase(txn_requests_total{status=\"settled\"}[30d])) / sum(increase(txn_requests_total[30d])))) / 0.005)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "green", "value": 60 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Directly implements the error-budget math from docs/SLO.md (99.5% target over a rolling 30 days). This is the number that should drive the 'pause feature work' conversation described in the SLO doc's error budget policy -- not a vague sense that 'things feel a bit broken lately'."
+    },
+    {
+      "id": 4,
+      "title": "Settlement Volume Trend (24h)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "sum(increase(txn_requests_total{status=\"settled\"}[1h]))",
+          "legendFormat": "settled/hr"
+        },
+        {
+          "expr": "sum(increase(txn_requests_total{status=\"failed\"}[1h]))",
+          "legendFormat": "failed/hr"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "Volume trend over the day -- useful for spotting whether a failure spike correlates with a traffic spike (capacity problem) or happened during otherwise-normal volume (a real regression)."
+    },
+    {
+      "id": 5,
+      "title": "p95 Settlement Latency Trend (24h)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(txn_request_duration_seconds_bucket[1h])) by (le))",
+          "legendFormat": "p95 latency"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "Latency framed on a business timescale (24h trend, not a 5m incident window) -- the question this answers is 'is settlement getting slower over the day/week', not 'is something on fire right now'."
+    },
+    {
+      "id": 6,
+      "title": "Illustrative Estimated Impact of Failures (placeholder)",
+      "type": "text",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 14 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Note:** this demo app has no real transaction-value data, so it does not compute an actual $ figure -- doing so here would be fabricated and misleading. In a real deployment, this panel would multiply the *Failed Transactions/min* metric above by an actual average transaction value (sourced from a real business metric, not guessed), to translate reliability directly into a number a non-technical stakeholder immediately understands. That translation -- engineering metric to business impact -- is the actual point of a business-facing dashboard, and it's called out explicitly here rather than faked with a made-up number."
+      }
+    }
+  ]
+}
