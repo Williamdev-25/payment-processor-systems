@@ -17,7 +17,7 @@ variable "chart_version" {
 
 variable "loki_chart_version" {
   type    = string
-  default = "6.16.0"
+  default = "5.47.2"
 }
 
 variable "promtail_chart_version" {

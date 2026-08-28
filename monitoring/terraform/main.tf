@@ -209,7 +209,6 @@ resource "helm_release" "loki" {
 
     values = [
     yamlencode({
-      deploymentMode = "SingleBinary"
       loki = {
         commonConfig = { replication_factor = 1 }
         auth_enabled = false
@@ -229,15 +228,6 @@ resource "helm_release" "loki" {
           }]
         }
       }
-      read = {
-        replicas = 0
-      }
-      write = {
-        replicas = 0
-      }
-      backend = {
-        replicas = 0
-      }
       singleBinary = {
         replicas = 1
         resources = {
@@ -249,6 +239,14 @@ resource "helm_release" "loki" {
           size    = "10Gi"
         }
       }
+      read   = { replicas = 0 }
+      write  = { replicas = 0 }
+      backend = { replicas = 0 }
+      monitoring = {
+        selfMonitoring = { enabled = false }
+        lokiCanary     = { enabled = false }
+      }
+      test = { enabled = false }
     })
   ]
 
