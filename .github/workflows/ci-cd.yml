@@ -75,6 +75,14 @@ jobs:
         run: tflint --recursive --format compact
         continue-on-error: true
 
+      - name: Debug admin_cidr (temporary)
+        run: |
+          echo "Length of admin_cidr secret: ${#ADMIN_CIDR}"
+          echo "admin_cidr ends with /32: $([[ "$ADMIN_CIDR" == */32 ]] && echo yes || echo no)"
+          echo "admin_cidr starts/ends with quote or space: $([[ "$ADMIN_CIDR" =~ ^[[:space:]\"\'] || "$ADMIN_CIDR" =~ [[:space:]\"\']$ ]] && echo yes || echo no)"
+        env:
+          ADMIN_CIDR: ${{ secrets.TF_VAR_ADMIN_CIDR }}
+
       - name: Get GitHub Actions runner IP
         id: runner_ip
         run: |
