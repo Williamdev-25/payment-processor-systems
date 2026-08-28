@@ -5,11 +5,11 @@ resource "aws_eks_cluster" "this" {
 
   vpc_config {
     subnet_ids              = var.subnet_ids
-    endpoint_private_access = false
+    endpoint_private_access = true
     endpoint_public_access  = true
     # Restrict who can reach the public API endpoint — wide open (0.0.0.0/0)
     # is the default but not appropriate for anything beyond a demo.
-    public_access_cidrs = ["0.0.0.0/0"]
+    public_access_cidrs = var.cluster_public_access_cidrs
   }
 
   # Control-plane audit/API logs to CloudWatch — off by default on EKS,
