@@ -340,6 +340,19 @@ jobs:
           echo "Runner IP resolved to: $IP"
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
+      - name: Whitelist runner IP on EKS API endpoint
+        run: |
+          RUNNER_CIDR="${{ steps.runner_ip.outputs.ip }}/32"
+          ADMIN_CIDR="${{ secrets.TF_VAR_ADMIN_CIDR }}"
+          aws eks update-cluster-config \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --resources-vpc-config "publicAccessCidrs=$ADMIN_CIDR,$RUNNER_CIDR" \
+            2>&1 || echo "Cluster may not exist yet -- skipping whitelist (first apply)"
+          aws eks wait cluster-active \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} || true
+
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
@@ -432,3 +445,15 @@ jobs:
           echo "Rollout failed or timed out -- rolling back automatically."
           kubectl rollout undo deployment/txn-gateway
           kubectl rollout status deployment/txn-gateway --timeout=120s
+
+      - name: Remove runner IP from EKS API endpoint
+        if: always()
+        run: |
+          aws eks update-cluster-config \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --resources-vpc-config "publicAccessCidrs=${{ secrets.TF_VAR_ADMIN_CIDR }}" \
+            2>&1 || echo "Could not restore EKS CIDRs -- check manually."
+          aws eks wait cluster-active \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} || true
