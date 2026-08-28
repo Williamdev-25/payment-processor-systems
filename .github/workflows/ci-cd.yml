@@ -357,9 +357,24 @@ jobs:
               --region ${{ env.AWS_REGION }} \
               --resources-vpc-config "publicAccessCidrs=$ADMIN_CIDR,$RUNNER_CIDR" \
               2>&1 || echo "Cluster may not exist yet -- skipping whitelist (first apply)"
-            aws eks wait cluster-active \
-              --name ${{ env.EKS_CLUSTER_NAME }} \
-              --region ${{ env.AWS_REGION }} || true
+            echo "Waiting for EKS CIDR update to propagate..."
+            for i in $(seq 1 24); do
+              STATUS=$(aws eks describe-cluster \
+                --name ${{ env.EKS_CLUSTER_NAME }} \
+                --region ${{ env.AWS_REGION }} \
+                --query 'cluster.status' --output text 2>/dev/null || echo "")
+              CIDRS=$(aws eks describe-cluster \
+                --name ${{ env.EKS_CLUSTER_NAME }} \
+                --region ${{ env.AWS_REGION }} \
+                --query 'cluster.resourcesVpcConfig.publicAccessCidrs' \
+                --output text 2>/dev/null || echo "")
+              echo "[$i/24] Status: $STATUS | CIDRs: $CIDRS"
+              if [ "$STATUS" = "ACTIVE" ] && echo "$CIDRS" | grep -q "$RUNNER_CIDR"; then
+                echo "CIDR update confirmed active."
+                break
+              fi
+              sleep 15
+            done
           fi
 
       - name: Terraform Apply
