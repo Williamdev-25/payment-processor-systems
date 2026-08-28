@@ -5,7 +5,7 @@ resource "aws_eks_cluster" "this" {
 
   vpc_config {
     subnet_ids              = var.subnet_ids
-    endpoint_private_access = true
+    endpoint_private_access = false
     endpoint_public_access  = true
     # Restrict who can reach the public API endpoint — wide open (0.0.0.0/0)
     # is the default but not appropriate for anything beyond a demo.
