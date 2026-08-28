@@ -77,7 +77,18 @@ jobs:
 
       - name: Get GitHub Actions runner IP
         id: runner_ip
-        run: echo "ip=$(curl -s https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+        run: |
+          IP=$(curl -s --max-time 10 https://api.ipify.org || true)
+          if [ -z "$IP" ]; then
+            echo "Primary IP service failed, trying fallback..."
+            IP=$(curl -s --max-time 10 https://ifconfig.me || true)
+          fi
+          if [ -z "$IP" ]; then
+            echo "::error::Could not determine runner IP from any source."
+            exit 1
+          fi
+          echo "Runner IP resolved to: $IP"
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan
         id: plan
@@ -308,7 +319,18 @@ jobs:
 
       - name: Get GitHub Actions runner IP
         id: runner_ip
-        run: echo "ip=$(curl -s https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+        run: |
+          IP=$(curl -s --max-time 10 https://api.ipify.org || true)
+          if [ -z "$IP" ]; then
+            echo "Primary IP service failed, trying fallback..."
+            IP=$(curl -s --max-time 10 https://ifconfig.me || true)
+          fi
+          if [ -z "$IP" ]; then
+            echo "::error::Could not determine runner IP from any source."
+            exit 1
+          fi
+          echo "Runner IP resolved to: $IP"
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
