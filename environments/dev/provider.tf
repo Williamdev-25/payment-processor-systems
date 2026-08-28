@@ -16,6 +16,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.20"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 }
 
@@ -31,9 +35,6 @@ provider "aws" {
   }
 }
 
-# Both auth to the cluster via a short-lived token from `aws eks get-token`,
-# reusing whatever AWS credentials Terraform is already running with — no
-# static kubeconfig or long-lived secret involved anywhere in this chain.
 provider "helm" {
    kubernetes {
     host                   = module.eks.cluster_endpoint
@@ -55,4 +56,3 @@ provider "kubernetes" {
     args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
   }
 }
-

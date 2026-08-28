@@ -1,9 +1,6 @@
 # =============================================================================
 # Monitoring — delegates to the standalone monitoring module
 # =============================================================================
-# See monitoring/MONITORING.md for the full observability strategy
-# (dashboards, alert design, why they're split the way they are).
-
 resource "time_sleep" "wait_for_eks_endpoint" {
   depends_on      = [module.eks]
   create_duration = "60s"
