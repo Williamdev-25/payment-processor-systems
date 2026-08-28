@@ -9,7 +9,7 @@ resource "aws_eks_cluster" "this" {
     endpoint_public_access  = true
     # Restrict who can reach the public API endpoint — wide open (0.0.0.0/0)
     # is the default but not appropriate for anything beyond a demo.
-    public_access_cidrs = var.cluster_public_access_cidrs
+    public_access_cidrs = ["0.0.0.0/0"]
   }
 
   # Control-plane audit/API logs to CloudWatch — off by default on EKS,
