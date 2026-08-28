@@ -3,6 +3,12 @@
 # =============================================================================
 # See monitoring/MONITORING.md for the full observability strategy
 # (dashboards, alert design, why they're split the way they are).
+
+resource "time_sleep" "wait_for_eks_endpoint" {
+  depends_on      = [module.eks]
+  create_duration = "60s"
+}
+
 module "monitoring" {
   source = "../../monitoring/terraform"
 
@@ -12,5 +18,5 @@ module "monitoring" {
   grafana_admin_password = var.grafana_admin_password
   slack_webhook_url      = var.slack_webhook_url
 
-  depends_on = [module.eks]
+  depends_on = [time_sleep.wait_for_eks_endpoint]
 }
