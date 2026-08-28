@@ -216,6 +216,18 @@ resource "helm_release" "loki" {
         storage = {
           type = "filesystem"
         }
+        schemaConfig = {
+          configs = [{
+            from         = "2024-01-01"
+            store        = "tsdb"
+            object_store = "filesystem"
+            schema       = "v13"
+            index = {
+              prefix = "index_"
+              period = "24h"
+            }
+          }]
+        }
       }
       read = {
         replicas = 0
