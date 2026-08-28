@@ -207,14 +207,24 @@ resource "helm_release" "loki" {
   version    = var.loki_chart_version
   namespace  = kubernetes_namespace.monitoring[0].metadata[0].name
 
-  values = [
+    values = [
     yamlencode({
+      deploymentMode = "SingleBinary"
       loki = {
-        commonConfig = { replication_factor = 1 } # single-binary, dev-appropriate
+        commonConfig = { replication_factor = 1 }
         auth_enabled = false
         storage = {
-          type = "filesystem" # local disk for dev; S3/GCS is the production upgrade
+          type = "filesystem"
         }
+      }
+      read = {
+        replicas = 0
+      }
+      write = {
+        replicas = 0
+      }
+      backend = {
+        replicas = 0
       }
       singleBinary = {
         replicas = 1
