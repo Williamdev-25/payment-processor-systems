@@ -3,7 +3,7 @@
 # =============================================================================
 resource "time_sleep" "wait_for_eks_endpoint" {
   depends_on      = [module.eks]
-  create_duration = "60s"
+  create_duration = "180s"
 
   triggers = {
     allowed_cidrs = join(",", compact([var.admin_cidr, var.ci_runner_cidr]))
