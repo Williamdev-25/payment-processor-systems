@@ -138,7 +138,7 @@ jobs:
         with:
           name: tfplan
           path: ${{ env.TF_WORKING_DIR }}/tfplan
-          retention-days: 5
+          retention-days: 4
 
   # ===========================================================================
   # Infra security scanning
