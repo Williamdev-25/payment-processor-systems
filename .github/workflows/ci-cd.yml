@@ -444,6 +444,24 @@ jobs:
           role-session-name: GitHubActions
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Get GitHub Actions runner IP
+        id: runner_ip
+        run: |
+          IP=$(curl -s --max-time 10 https://api.ipify.org || curl -s --max-time 10 https://ifconfig.me)
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Whitelist runner IP on EKS API endpoint
+        run: |
+          RUNNER_CIDR="${{ steps.runner_ip.outputs.ip }}/32"
+          aws eks update-cluster-config \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --resources-vpc-config "publicAccessCidrs=${{ secrets.TF_VAR_ADMIN_CIDR }},$RUNNER_CIDR" \
+            2>&1 || echo "Skipping -- cluster may still be updating"
+          aws eks wait cluster-active \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
