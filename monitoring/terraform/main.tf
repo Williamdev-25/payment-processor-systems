@@ -207,24 +207,22 @@ resource "helm_release" "loki" {
   version    = var.loki_chart_version
   namespace  = kubernetes_namespace.monitoring[0].metadata[0].name
 
-    values = [
+  timeout = 600
+
+  values = [
     yamlencode({
+      deploymentMode = "SingleBinary"
       loki = {
-        commonConfig = { replication_factor = 1 }
         auth_enabled = false
-        storage = {
-          type = "filesystem"
-        }
+        commonConfig = { replication_factor = 1 }
+        storage      = { type = "filesystem" }
         schemaConfig = {
           configs = [{
-            from         = "2024-01-01"
-            store        = "tsdb"
+            from   = "2024-01-01"
+            store  = "tsdb"
             object_store = "filesystem"
-            schema       = "v13"
-            index = {
-              prefix = "index_"
-              period = "24h"
-            }
+            schema = "v13"
+            index  = { prefix = "loki_index_", period = "24h" }
           }]
         }
       }
@@ -234,19 +232,11 @@ resource "helm_release" "loki" {
           requests = { cpu = "100m", memory = "256Mi" }
           limits   = { cpu = "500m", memory = "512Mi" }
         }
-        persistence = {
-          enabled = true
-          size    = "10Gi"
-        }
+        persistence = { enabled = true, size = "10Gi" }
       }
-      read   = { replicas = 0 }
-      write  = { replicas = 0 }
+      read    = { replicas = 0 }
+      write   = { replicas = 0 }
       backend = { replicas = 0 }
-      monitoring = {
-        selfMonitoring = { enabled = false }
-        lokiCanary     = { enabled = false }
-      }
-      test = { enabled = false }
     })
   ]
 
