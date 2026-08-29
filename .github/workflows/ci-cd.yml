@@ -477,6 +477,7 @@ jobs:
           kubectl apply -f k8s/remediation-cronjob.yaml
           kubectl set image deployment/txn-gateway \
             txn-gateway="$ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/dev-txn-gateway:${{ github.sha }}"
+            kubectl patch cronjob remediation-bot --type=json -p='[{"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/image", "value": "'"$ACCOUNT_ID"'.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/dev-remediation-bot:'"$TAG"'"}]'
 
       - name: Wait for rollout
         run: kubectl rollout status deployment/txn-gateway --timeout=180s
