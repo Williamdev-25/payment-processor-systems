@@ -208,6 +208,8 @@ resource "helm_release" "loki" {
   namespace  = kubernetes_namespace.monitoring[0].metadata[0].name
 
   timeout = 600
+  atomic  = false
+  wait    = false
 
   values = [
     yamlencode({
